@@ -1,6 +1,6 @@
 # Wrought installer and updater for Windows. Installs for the current user only; no admin rights needed.
 # Run install.cmd, or: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-param([switch]$Scheduled, [switch]$AtLogon, [switch]$Rollback, [switch]$Repair)
+param([Parameter(Position = 0)][string]$PairCode = "", [switch]$Scheduled, [switch]$AtLogon, [switch]$Rollback, [switch]$Repair)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -19,6 +19,7 @@ $Updater = Join-Path $Root "updater"
 $LogFile = Join-Path $Root "updater.log"
 $VersionFile = "wrought-version.txt"
 $Exe = "Wrought.exe"
+$PairCodePattern = '^[A-Za-z0-9_-]{4,64}$'
 $TaskName = "Wrought updater"
 $DailyAt = "12:30"
 $JustStartedMinutes = 2
@@ -189,6 +190,8 @@ function Main {
     if ($Rollback) { Invoke-Rollback; return }
     $installed = Get-InstalledVersion $App
     $firstInstall = -not $installed
+    if ($firstInstall -and -not $Scheduled -and -not $PairCode) { $PairCode = (Read-Host "Pairing code from the Wrought website (press Enter to skip)").Trim() }
+    if ($PairCode -and $PairCode -notmatch $PairCodePattern) { Say "That pairing code does not look right, so pairing is skipped. You can pair inside the app."; $PairCode = "" }
     $release = Get-Release
     if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -eq "wrought-install.ps1" -and $release.Sums.ContainsKey("install.ps1")) {
         if ((Get-FileHash -Algorithm SHA256 -Path $PSCommandPath).Hash.ToLower() -ne $release.Sums["install.ps1"]) { throw "This installer does not match the one in the latest release. Download install.cmd again." }
@@ -217,7 +220,15 @@ function Main {
     Register-Wrought $release.Version $firstInstall
     Register-Task
     Say "Wrought $($release.Version) is installed."
-    if (-not $Scheduled) { Start-Process -FilePath (Join-Path $App $Exe) -WorkingDirectory $App }
+    if (-not $Scheduled) {
+        $launch = @{ FilePath = (Join-Path $App $Exe); WorkingDirectory = $App }
+        if ($firstInstall) {
+            $flags = @("--auto-setup")
+            if ($PairCode) { $flags += "--pair-code=$PairCode" }
+            $launch.ArgumentList = $flags
+        }
+        Start-Process @launch
+    }
     elseif ($running.Count -gt 0) { Start-Process -FilePath (Join-Path $App $Exe) -ArgumentList "--hidden" -WorkingDirectory $App }
 }
 
