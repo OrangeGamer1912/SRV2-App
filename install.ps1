@@ -190,7 +190,7 @@ function Main {
     if ($Rollback) { Invoke-Rollback; return }
     $installed = Get-InstalledVersion $App
     $firstInstall = -not $installed
-    if ($firstInstall -and -not $Scheduled -and -not $PairCode) { $PairCode = (Read-Host "Pairing code from the Wrought website (press Enter to skip)").Trim() }
+    if ($firstInstall -and -not $Scheduled -and -not $PairCode) { $PairCode = "$(Read-Host "Pairing code from the Wrought website (press Enter to skip)")".Trim() }
     if ($PairCode -and $PairCode -notmatch $PairCodePattern) { Say "That pairing code does not look right, so pairing is skipped. You can pair inside the app."; $PairCode = "" }
     $release = Get-Release
     if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -eq "wrought-install.ps1" -and $release.Sums.ContainsKey("install.ps1")) {
