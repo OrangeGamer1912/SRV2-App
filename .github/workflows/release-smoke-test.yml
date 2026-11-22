@@ -1,0 +1,73 @@
+name: Release smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-launch:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the latest release
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+
+      - name: Check the install
+        shell: powershell
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA "Programs\Wrought\app"
+          if (-not (Test-Path (Join-Path $app "Wrought.exe"))) { throw "Wrought.exe is missing" }
+          Get-Content (Join-Path $app "wrought-version.txt")
+          if (-not (Get-ScheduledTask -TaskName "Wrought updater" -ErrorAction SilentlyContinue)) { throw "updater task missing" }
+          if (-not (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Wrought")) { throw "uninstall entry missing" }
+
+      - name: Launch and read the log
+        shell: powershell
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA "Programs\Wrought\app"
+          Start-Process -FilePath (Join-Path $app "Wrought.exe") -ArgumentList "--hidden" -WorkingDirectory $app
+          $log = Join-Path $env:APPDATA "Wrought\logs\app.log"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $log); $i++) { Start-Sleep -Seconds 2 }
+          Start-Sleep -Seconds 10
+          if (-not (Test-Path $log)) { throw "no app.log written" }
+          Get-Content $log
+          if (-not (Select-String -Path $log -Pattern "started" -Quiet)) { throw "app did not log a start" }
+          if (-not (Get-Process -Name Wrought -ErrorAction SilentlyContinue)) { throw "Wrought is not running" }
+
+      - name: Update path (stage then apply the same release)
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Scheduled -StageOnly
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Scheduled -Apply
+          Start-Sleep -Seconds 10
+          if (-not (Get-Process -Name Wrought -ErrorAction SilentlyContinue)) { throw "not running after update" }
+
+      - name: Rollback
+        shell: powershell
+        run: |
+          Get-Process -Name Wrought -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Rollback
+
+      - name: Uninstall
+        shell: powershell
+        run: |
+          Get-Process -Name Wrought -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 3
+          powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "Programs\Wrought\app\Wrought.exe")) { throw "still installed" }
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            ~\AppData\Local\Programs\Wrought\updater.log
+            ~\AppData\Roaming\Wrought\logs\*.log
+          if-no-files-found: ignore
