@@ -1,6 +1,6 @@
 # Wrought installer and updater for Windows. Installs for the current user only; no admin rights needed.
 # Run install.cmd, or: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-param([Parameter(Position = 0)][string]$PairCode = "", [switch]$Scheduled, [switch]$AtLogon, [switch]$Rollback, [switch]$Repair)
+param([Parameter(Position = 0)][string]$PairCode = "", [switch]$Scheduled, [switch]$AtLogon, [switch]$Rollback, [switch]$Repair, [switch]$Apply, [switch]$StageOnly)
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -155,6 +155,38 @@ function Register-Wrought([version]$Version, [bool]$FirstInstall) {
     New-ItemProperty -Force -Path $UninstallKey -Name "EstimatedSize" -Value $size -PropertyType DWord | Out-Null
 }
 
+function Repoint-Legacy {
+    $old = Join-Path $Root $Exe
+    $new = Join-Path $App $Exe
+    try {
+        $run = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        if (Test-Path $run) {
+            foreach ($prop in (Get-ItemProperty -Path $run).PSObject.Properties) {
+                if ($prop.Value -is [string] -and $prop.Value.IndexOf($old, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    $fixed = [regex]::Replace($prop.Value, [regex]::Escape($old), { param($m) $new }, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                    Set-ItemProperty -Path $run -Name $prop.Name -Value $fixed
+                    Say "Moved the startup entry $($prop.Name) to the new Wrought."
+                }
+            }
+        }
+        $shell = New-Object -ComObject WScript.Shell
+        $folders = @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup"), (Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"))
+        foreach ($folder in $folders) {
+            if (-not (Test-Path $folder)) { continue }
+            foreach ($file in Get-ChildItem -Path $folder -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue) {
+                $link = $shell.CreateShortcut($file.FullName)
+                if ($link.TargetPath -ieq $old) {
+                    $link.TargetPath = $new
+                    $link.WorkingDirectory = $App
+                    $link.IconLocation = "$new,0"
+                    $link.Save()
+                    Say "Moved the shortcut $($file.Name) to the new Wrought."
+                }
+            }
+        }
+    } catch { Say "Could not move the old startup entries: $($_.Exception.Message)" }
+}
+
 function Register-Task {
     $script = Join-Path $Updater "install.ps1"
     $arguments = "--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Scheduled"
@@ -190,26 +222,29 @@ function Main {
     if ($Rollback) { Invoke-Rollback; return }
     $installed = Get-InstalledVersion $App
     $firstInstall = -not $installed
-    if ($firstInstall -and -not $Scheduled -and -not $PairCode) { $PairCode = "$(Read-Host "Pairing code from the Wrought website (press Enter to skip)")".Trim() }
+    $legacy = $firstInstall -and (Test-Path (Join-Path $Root $Exe))
+    if ($legacy) { Say "An older Wrought install was found in $Root. This installs the new version beside it. Once it works, remove the old one from Settings, Apps." }
+    if ($firstInstall -and -not $legacy -and -not $Scheduled -and -not $PairCode) { $PairCode = "$(Read-Host "Pairing code from the Wrought website (press Enter to skip)")".Trim() }
     if ($PairCode -and $PairCode -notmatch $PairCodePattern) { Say "That pairing code does not look right, so pairing is skipped. You can pair inside the app."; $PairCode = "" }
     $release = Get-Release
     if ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -eq "wrought-install.ps1" -and $release.Sums.ContainsKey("install.ps1")) {
         if ((Get-FileHash -Algorithm SHA256 -Path $PSCommandPath).Hash.ToLower() -ne $release.Sums["install.ps1"]) { throw "This installer does not match the one in the latest release. Download install.cmd again." }
     }
     Update-Scripts $release
-    $staged = Get-InstalledVersion $Staged
+    $stagedVersion = Get-InstalledVersion $Staged
     if ($installed -and $installed -ge $release.Version -and -not $Repair) {
         if (Test-Path $Staged) { Remove-Item -Recurse -Force $Staged }
         Say "Wrought $installed is up to date."
         if (-not $Scheduled) { Register-Task }
         return
     }
-    if (-not $staged -or $staged -lt $release.Version) { Stage-Release $release }
+    if (-not $stagedVersion -or $stagedVersion -lt $release.Version) { Stage-Release $release }
+    if ($StageOnly) { return }
     $running = Get-Running
     if ($running.Count -gt 0) {
         $young = $AtLogon -and -not ($running | Where-Object { $_.StartTime -lt (Get-Date).AddMinutes(-$JustStartedMinutes) })
         $agreed = (-not $Scheduled) -and ((Read-Host "Wrought is open. Close it now and update? (y/n)") -match '^[yY]')
-        if (-not $young -and -not $agreed) {
+        if (-not $young -and -not $agreed -and -not $Apply) {
             Say "Wrought $($release.Version) is ready and will be installed once Wrought is closed (or at the next sign-in)."
             return
         }
@@ -218,18 +253,19 @@ function Main {
     }
     Swap-In
     Register-Wrought $release.Version $firstInstall
+    Repoint-Legacy
     Register-Task
     Say "Wrought $($release.Version) is installed."
     if (-not $Scheduled) {
         $launch = @{ FilePath = (Join-Path $App $Exe); WorkingDirectory = $App }
-        if ($firstInstall) {
+        if ($firstInstall -and -not $legacy) {
             $flags = @("--auto-setup")
             if ($PairCode) { $flags += "--pair-code=$PairCode" }
             $launch.ArgumentList = $flags
         }
         Start-Process @launch
     }
-    elseif ($running.Count -gt 0) { Start-Process -FilePath (Join-Path $App $Exe) -ArgumentList "--hidden" -WorkingDirectory $App }
+    elseif ($running.Count -gt 0 -or $Apply) { Start-Process -FilePath (Join-Path $App $Exe) -ArgumentList "--hidden" -WorkingDirectory $App }
 }
 
 $lock = New-Object System.Threading.Mutex($false, "Local\WroughtUpdater")
