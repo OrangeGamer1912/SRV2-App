@@ -9,6 +9,11 @@ Read this fully before running anything. It covers Windows and Debian-based Linu
 4. Do not install other software, and do not use admin rights on Windows: the installer is per-user and needs none.
 5. Never delete the person's files. Uninstalling keeps their settings unless they ask otherwise.
 6. Say plainly what you did not verify (for example, that the app opened and paired).
+7. The personal installer (`wrought-install.cmd` or `wrought-install.sh`, see below) contains a single-use install token. Treat the file's contents like a password: never open, print, quote, copy, upload or paste them, not even in a report or error. Never write the token anywhere, and never set `WROUGHT_ENROLL_TOKEN` yourself.
+
+## Which route to use
+1. **The person can sign in to the Wrought website: use the personal installer.** They press Add a PC on My PCs and download `wrought-install.cmd` (Windows) or `wrought-install.sh` (Linux). It installs and pairs in one step. You cannot press that button for them: the sign-in is theirs. Ask them to download the file and tell you where it is, then run it (Windows: double-click or `cmd /c`; Linux: `bash wrought-install.sh`, which asks them for their password). It is valid for about an hour, works once and deletes itself when finished. Do not retry a used file; ask for a new one.
+2. **They cannot, or only want the app: use the release files below.** That installs without pairing. Pairing is then done inside the app (join link, then the 5-minute code from Add a PC).
 
 ## What you need
 - Windows 10 or 11 (64-bit) with Windows PowerShell 5.1 or newer, and internet access to github.com. Or: Debian-based 64-bit Linux (Ubuntu, Kubuntu, Mint, Debian) with `apt`.
@@ -77,4 +82,15 @@ Files on the release: `setup.sh`, `srv2app_<version>_amd64.deb`, `SHA256SUMS`.
 | `This installer does not match the one in the latest release` | Download `install.cmd` or `install.ps1` again and verify the hash. |
 | Hash mismatch on download | Do not install. Retry once; if it repeats, report it. |
 | `running scripts is disabled` | Use the `-ExecutionPolicy Bypass` form above; do not change system policy. |
-| Cloudflare error or 502 in the app | The person is not allowed on the website. Not an install fault. |
+| Cloudflare error (403 or 502) in the app | The person is not allowed on the website. Not an install fault. |
+| Personal installer: `Could not download the Wrought installer` | No route to github.com. Check the connection, then ask the person to press Add a PC again for a new file. |
+| Personal installer: `did not match its checksum` | Nothing was installed. Retry once with a new file; if it repeats, stop and report the exact message. Never bypass the check. |
+| Personal installer: `The latest Wrought release has no Linux build` or no Windows build | The release is incomplete. Stop and tell the person. |
+| App opens but shows `Setup did not finish`, or is not paired | The token expired (about an hour), was already used, or the server restarted. Ask the person for a new file from Add a PC. Do not reuse the old one. Fallback: join link, then the typed 5-minute code, by the person, in the app. |
+| The PC limit is reached | The person removes a PC they no longer use under My PCs. You do not do it. |
+| Windows or antivirus blocks or removes the file | Tell the person; they allow it for this run. Do not disable antivirus or change security settings. Wrought is not code-signed yet. |
+| Installer window closes before you can read it | Run it from a console (`cmd /c` on Windows) so the output stays, and report the last lines. |
+| Need to see what happened | Windows install log: `%LOCALAPPDATA%\Programs\Wrought\updater.log`. App log: `%APPDATA%\Wrought\logs\app.log` (Linux: `~/.config/srv2app/logs/app.log`). Neither holds a token. Report the last lines only. |
+| A fresh start is needed on Windows | Uninstall, delete `%APPDATA%\Wrought\device.bin` (only if the person agrees), then ask for a new file. |
+
+If you cannot fix it within these steps, stop and report: what you ran, the exact message, and what you did not verify. Do not guess further.
